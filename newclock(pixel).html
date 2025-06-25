@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stopwatch</title>
+  <style>
+    :root {
+      --pixel: 20px;
+      --gap: 1px;
+      --cols: 30;
+      --rows: 16;
+      --pad: calc(var(--gap) * 5);
+      --bg: #fafbfc; 
+      --border: #160452;
+      --sand: #1b9fc7;
+      --device-text: #1c6bcb;
+      --flow-time: 10000ms; /* total transfer time */
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      height: 100vh; background: #99f1f1;
+      font-family: sans-serif;
+    }
+    .hourglass-wrapper {
+      position: relative;
+      perspective: 800px;
+      margin-bottom: 1rem;
+    }
+    .pixel-art {
+      display: grid;
+      grid-template-columns: repeat(var(--cols), var(--pixel));
+      grid-auto-rows: var(--pixel);
+      gap: var(--gap);
+      background: transparent; 
+      padding: 0; 
+      box-shadow: none; 
+      transform-style: preserve-3d;
+      transition: transform 1s ease;
+    }
+    .pixel-art.flipped {
+      transform: rotateX(180deg);
+    }
+    .pixel {
+      width: var(--pixel);
+      height: var(--pixel);
+      background: #f1ecec;
+    }
+    .pixel.black { background: var(--border); }
+    .pixel.sand { background: var(--sand); }
+
+    .stopwatch {
+      position: absolute;
+      top: calc(var(--pad) + 2 * (var(--pixel) + var(--gap)));
+      left: calc(var(--pad) + 16 * (var(--pixel) + var(--gap)));
+      width: calc(9 * var(--pixel) + 8 * var(--gap));
+      height: calc(11 * var(--pixel) + 10 * var(--gap));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; font-weight: bold; color: var(--device-text);
+      pointer-events: none;
+    }
+    .controls { display: flex; gap: 1rem; }
+    button {
+      padding: .5em 1em; font-size: 1rem;
+      border: none; border-radius: 4px;
+      background: #0f88d3; color: #fff;
+      cursor: pointer;
+      transition: background .2s, transform .2s;
+    }
+    button:hover { background: #489fd2; }
+    button:active { transform: scale(.95); }
+  </style>
+</head>
+<body>
+  <div class="hourglass-wrapper">
+    <div id="canvas" class="pixel-art"></div>
+    <div id="display" class="stopwatch">00:00:00</div>
+  </div>
+  <div class="controls">
+    <button id="btnStart">Start</button>
+    <button id="btnStop">Stop</button>
+    <button id="btnReset">Reset</button>
+  </div>
+
+  <script>
+  ;(function(){
+    // 1) Pattern & refs
+    const pattern = [
+      ".......#####..................",
+      "......#######..#############..",
+      ".....#.......#.#...........#..",
+      ".....#.......#.#...........#..",
+      ".....#.......#.#...........#..",
+      "......##...##..#...........#.",
+      "........#.#....#...........#..",
+      "........#.#....#...........#..",
+      "........#.#....#...........#.",
+      "......##...##..#...........#",
+      ".....#.......#.#...........#..",
+      ".....#.......#.#...........#..",
+      ".....#.......#.#...........#..",
+      "......#######..#############.",
+      ".......#####..................",
+      ".............................."
+    ];
+    const cols      = 30,
+          rows      = 16,
+          total     = cols * rows,
+          canvas    = document.getElementById('canvas'),
+          display   = document.getElementById('display'),
+          btnStart  = document.getElementById('btnStart'),
+          btnStop   = document.getElementById('btnStop'),
+          btnReset  = document.getElementById('btnReset');
+
+    // 2) Render grid
+    const pixels = new Array(total);
+    const walls  = new Set();
+    pattern.forEach((row, r)=>{
+      for(let c=0;c<cols;c++){
+        const idx = r*cols + c;
+        const div = document.createElement('div');
+        div.className = 'pixel'+(row[c]==='#'? ' black':'');
+        canvas.appendChild(div);
+        pixels[idx] = div;
+        if(row[c]==='#') walls.add(idx);
+      }
+    });
+
+    // 3) detect "interior" between walls
+function isInside(idx) {
+  const r = Math.floor(idx / cols),
+        c = idx % cols,
+        line = pattern[r];
+
+  const L = line.indexOf('#');
+  let R = line.indexOf('#', L + 1);
+
+  // fallback if no second '#' found
+  if (R === -1) R = line.lastIndexOf('#');
+
+  return c > L && c < R && line[c] === '.';
+}
+
+    // 4) collect top‐bulb & bottom‐bulb cells
+    const topBulb = [], bottomBulb = [];
+    for(let idx=0; idx<total; idx++){
+      if(!isInside(idx)) continue;
+      const r = Math.floor(idx/cols);
+      if(r < rows/2) topBulb.push(idx);
+      else           bottomBulb.push(idx);
+    }
+    // sort row‐major
+    const sortRow = arr => arr.sort((a,b)=>
+      Math.floor(a/cols)-Math.floor(b/cols)
+    );
+    sortRow(topBulb);
+    sortRow(bottomBulb);
+
+    // 5) State
+    let queueIn    = [],
+        queueOut   = [],
+        flowTimer  = null,
+        clockTimer = null,
+        flipped    = false,
+        running    = false,
+        hh=0,mm=0,ss=0;
+
+    // fill bottom at load
+    bottomBulb.forEach(i=>pixels[i].classList.add('sand'));
+
+    // 6) stopwatch
+    const pad = n=>n.toString().padStart(2,'0');
+    function tick(){
+      ss++;
+      if(ss===60){ ss=0; mm++; }
+      if(mm===60){ mm=0; hh++; }
+      display.textContent = `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
+    }
+
+    // 7) prepare queues
+    function initQueues(){
+      const from = flipped ? bottomBulb : topBulb;
+      const to   = flipped ? topBulb    : bottomBulb;
+      queueIn  = from.slice();
+      queueOut = to.slice();
+    }
+
+    // 8) one‐grain transfer
+    function step(){
+      // if empty → flip & restart
+      if(!queueIn.length){
+        clearInterval(flowTimer);
+        setTimeout(()=>{
+          canvas.classList.toggle('flipped');
+          flipped = !flipped;
+          initQueues();
+          flow();
+        }, 500);
+        return;
+      }
+      const src = queueIn.shift();
+      const dst = queueOut.shift();
+      pixels[src].classList.remove('sand');
+      pixels[dst].classList.add('sand');
+    }
+
+    // 9) continuous flow
+    function flow(){
+      const N       = queueIn.length;
+      const totalMs = parseFloat(
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--flow-time')
+      );
+      const interval = totalMs / N;
+      flowTimer = setInterval(step, interval);
+    }
+
+    // 10) controls
+    function start(){
+      if(running) return;
+      running = true;
+      // flip so sand is on top
+      if(!flipped){
+        canvas.classList.toggle('flipped');
+        flipped = true;
+      }
+      initQueues();
+      clockTimer = setInterval(tick, 1000);
+      flow();
+    }
+    function stop(){
+      running = false;
+      clearInterval(flowTimer);
+      clearInterval(clockTimer);
+    }
+    function reset(){
+      stop();
+      // clear all sand
+      topBulb.concat(bottomBulb)
+        .forEach(i=>pixels[i].classList.remove('sand'));
+      // reset flip
+      if(flipped){
+        canvas.classList.toggle('flipped');
+        flipped = false;
+      }
+      // refill bottom only
+      bottomBulb.forEach(i=>pixels[i].classList.add('sand'));
+      // reset clock
+      hh=mm=ss=0;
+      display.textContent = '00:00:00';
+    }
+
+    btnStart.addEventListener('click', start);
+    btnStop .addEventListener('click', stop);
+    btnReset.addEventListener('click', reset);
+  })();
+  </script>
+</body>
+</html>
